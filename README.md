@@ -1,8 +1,38 @@
-# Face Recognition (OpenCV)
+# Face Detector (OpenCV)
 
-This is a small, local face-recognition demo using OpenCV. It works by storing a few face images per person, training an LBPH model, and then matching live webcam faces against that model.
+## 1. What is it
+A small local face-recognition demo that lets you enroll faces, train an LBPH model, and authenticate using a webcam.
 
-## Setup
+### 1.a What problem does it solve
+It provides a simple, offline way to learn face enrollment and recognition flows without cloud services.
+
+### 1.b Simple learning project
+This is a small learning project to understand basic face datasets, training, and camera-based inference.
+
+## 2. Tool stack and purpose
+
+| Tool | Purpose |
+| --- | --- |
+| Python | Application runtime |
+| OpenCV | Face detection + LBPH recognition |
+| Flask | REST API and UI server |
+| SQLite | Local auth logs |
+| Flasgger | Swagger UI for API docs |
+
+## 3. Available endpoints
+
+- `POST /signup` enroll a person and retrain
+- `POST /authenticate` authenticate once from camera
+- `POST /deletefaces` clear all known faces, models, snapshots, and logs
+- `GET /ui` simple HTML dashboard
+- `GET /known/<person>/<filename>` serve stored face images
+- `GET /apidocs` Swagger UI
+
+Swagger UI: `http://127.0.0.1:8000/apidocs`
+
+## 4. How to build and run
+
+Build (install dependencies):
 
 ```bash
 python3 -m venv .venv
@@ -10,55 +40,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
-
-1) Capture faces for a person:
-
-```bash
-python app.py enroll alice --count 25
-```
-
-2) Train the model:
-
-```bash
-python app.py train
-```
-
-3) Run live recognition:
-
-```bash
-python app.py recognize
-```
-
-Press `q` to exit the camera windows.
-
-## Auth API
-
-Run a local REST server:
+Run (server):
 
 ```bash
 python app.py serve
 ```
-
-Trigger authentication (returns `200` on match, `403` on unknown):
-
-```bash
-curl -X POST http://127.0.0.1:8000/authenticate
-```
-
-Response example:
-
-```json
-{"status":"granted","name":"anoop","confidence":51.2,"snapshot":"data/snapshots/auth_1736345790123.jpg"}
-```
-
-## Project Layout
-
-- `app.py` - CLI for enrolling, training, and recognizing faces.
-- `data/known/<person>/` - Stored face images per person.
-- `models/` - Trained model and label map.
-
-## Notes
-
-- LBPH is simple and fast but sensitive to lighting and camera quality.
-- The `--threshold` value controls how strict matching is; lower is stricter.
