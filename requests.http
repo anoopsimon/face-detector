@@ -1,0 +1,24 @@
+@host = http://127.0.0.1:8000
+
+### Signup (enroll + train)
+POST {{host}}/signup
+Content-Type: application/json
+
+{
+  "name": "anoop",
+  "count": 25,
+  "delay": 0.4,
+  "camera": 0,
+  "consent": true
+}
+
+### Authenticate
+POST {{host}}/authenticate
+Content-Type: application/json
+
+{
+  "consent": true
+}
+
+### Delete all known faces
+POST {{host}}/deletefaces
