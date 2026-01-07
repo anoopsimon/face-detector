@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Face Auth Client</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: "Space Grotesk", "Futura", "Avenir Next", sans-serif;
+        background: #f6f1e8;
+        color: #1f1f1f;
+      }
+      .shell {
+        max-width: 920px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+      }
+      p {
+        margin: 0 0 18px;
+        color: #5c5247;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 18px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e6dcc2;
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 16px 30px rgba(16, 12, 8, 0.08);
+      }
+      .preview {
+        position: relative;
+      }
+      .preview canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      button {
+        border: 0;
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: #1e2a2f;
+        color: #fff;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: transparent;
+        color: #1e2a2f;
+        border: 1px solid #1e2a2f;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      video, img {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid #e6dcc2;
+        background: #fff;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .field {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      input {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #e6dcc2;
+        font-size: 14px;
+      }
+      .result {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #5c5247;
+        min-height: 20px;
+        white-space: pre-wrap;
+      }
+      @media (max-width: 860px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <h1>Face Auth Client</h1>
+      <p>Reference UI powered by the pluggable client SDK.</p>
+      <div class="layout">
+        <section class="card">
+          <div class="preview">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="overlay"></canvas>
+          </div>
+          <p>API base URL: <span id="apiBase"></span></p>
+          <div class="row">
+            <button id="start">Start Camera</button>
+            <button id="stop" class="secondary">Stop Camera</button>
+          </div>
+          <div class="field">
+            <label for="name">Name (for signup)</label>
+            <input id="name" placeholder="Anoop" autocomplete="name">
+          </div>
+          <div class="row">
+            <button id="auth">Capture & Authenticate</button>
+            <button id="signup" class="secondary">Capture & Sign Up</button>
+          </div>
+          <div class="result" id="result"></div>
+        </section>
+        <section class="card">
+          <img id="preview" alt="Captured frame">
+        </section>
+      </div>
+    </div>
+
+    <script src="./face-auth-client.js"></script>
+    <script>
+      const video = document.getElementById("video");
+      const preview = document.getElementById("preview");
+      const overlay = document.getElementById("overlay");
+      const result = document.getElementById("result");
+      const nameInput = document.getElementById("name");
+      const authBtn = document.getElementById("auth");
+      const signupBtn = document.getElementById("signup");
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      const apiBase = document.getElementById("apiBase");
+      const overlayCtx = overlay.getContext("2d");
+      let detectTimer = null;
+
+      const params = new URLSearchParams(window.location.search);
+      const baseUrl = params.get("api") || "http://127.0.0.1:8000";
+      apiBase.textContent = baseUrl;
+      const client = new FaceAuthClient({ video, baseUrl });
+
+      const setResult = (payload) => {
+        result.textContent = payload || "";
+      };
+
+      const resizeOverlay = () => {
+        const width = video.videoWidth || 640;
+        const height = video.videoHeight || 480;
+        overlay.width = width;
+        overlay.height = height;
+      };
+
+      const drawBoxes = (boxes) => {
+        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+        if (!boxes || !boxes.length) {
+          return;
+        }
+        overlayCtx.strokeStyle = "#20c064";
+        overlayCtx.lineWidth = 3;
+        overlayCtx.shadowColor = "rgba(32, 192, 100, 0.35)";
+        overlayCtx.shadowBlur = 8;
+        boxes.forEach((box) => {
+          const [x, y, w, h] = box;
+          const cx = x + w / 2;
+          const cy = y + h / 2;
+          const r = Math.min(w, h) / 2;
+          overlayCtx.beginPath();
+          overlayCtx.arc(cx, cy, r, 0, Math.PI * 2);
+          overlayCtx.stroke();
+        });
+      };
+
+      const startDetectionLoop = () => {
+        if (detectTimer) {
+          return;
+        }
+        detectTimer = setInterval(async () => {
+          if (!client.stream) {
+            return;
+          }
+          try {
+            const image = client.captureImage(0.6);
+            const payload = await client.detect({ image, quality: 0.6 });
+            const boxes = (payload.faces || []).map((face) => face.box);
+            drawBoxes(boxes);
+          } catch (err) {
+            drawBoxes([]);
+          }
+        }, 700);
+      };
+
+      const stopDetectionLoop = () => {
+        if (detectTimer) {
+          clearInterval(detectTimer);
+          detectTimer = null;
+        }
+        drawBoxes([]);
+      };
+
+      startBtn.addEventListener("click", async () => {
+        await client.startCamera();
+        resizeOverlay();
+        startDetectionLoop();
+        setResult("");
+      });
+
+      stopBtn.addEventListener("click", () => {
+        client.stopCamera();
+        stopDetectionLoop();
+        setResult("");
+      });
+
+      authBtn.addEventListener("click", async () => {
+        try {
+          const image = client.captureImage();
+          preview.src = image;
+          const payload = await client.authenticate({ image });
+          setResult(JSON.stringify(payload, null, 2));
+        } catch (err) {
+          setResult(err.message || "Authentication failed");
+        }
+      });
+
+      signupBtn.addEventListener("click", async () => {
+        const name = (nameInput.value || "").trim();
+        if (!name) {
+          setResult("Enter a name first.");
+          return;
+        }
+        try {
+          const payload = await client.signup(name, { count: 6, intervalMs: 300 });
+          setResult(JSON.stringify(payload, null, 2));
+        } catch (err) {
+          setResult(err.message || "Signup failed");
+        }
+      });
+    </script>
+  </body>
+</html>
