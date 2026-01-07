@@ -2,6 +2,10 @@
 
 ## 1. What is it
 A small local face-recognition demo that lets you enroll faces, train an LBPH model, and authenticate using a webcam.
+It is split into two parts:
+
+- SDK: Python module that exposes the core APIs and does the heavy lifting.
+- Client: a tiny JS library + reference HTML page that can be hosted via a CDN and plugged into any UI.
 
 ### 1.a What problem does it solve
 It provides a simple, offline way to learn face enrollment and recognition flows without cloud services.
@@ -15,7 +19,7 @@ This is a small learning project to understand basic face datasets, training, an
 | --- | --- |
 | Python | Application runtime |
 | OpenCV | Face detection + LBPH recognition |
-| Flask | REST API and UI server |
+| Flask | REST API server (SDK-backed) |
 | SQLite | Local auth logs |
 | Flasgger | Swagger UI for API docs |
 
@@ -27,7 +31,6 @@ This is a small learning project to understand basic face datasets, training, an
 - `POST /deletefaces` clear all known faces, models, snapshots, and logs
 - `GET /ui` simple HTML dashboard
 - `GET /known/<person>/<filename>` serve stored face images
-- `GET /client` browser capture demo (client-side camera)
 - `GET /apidocs` Swagger UI
 
 Swagger UI: `http://127.0.0.1:8000/apidocs`
@@ -50,6 +53,48 @@ python app.py serve
 
 Client capture (browser):
 
+Serve the `client/` folder from any static host and point it at the API.
+
+## 5. SDK + Client split
+
+SDK module:
+
 ```text
-http://127.0.0.1:8000/client
+sdk/core.py    core face detection + training + authentication
+sdk/server.py  Flask app factory (REST API)
+```
+
+Client assets (pluggable, host separately):
+
+```text
+client/face-auth-client.js  CDN-friendly client SDK (window.FaceAuthClient)
+client/index.html           reference UI (uses the SDK)
+```
+
+Use the client SDK in your own UI:
+
+```html
+<script src="https://your-cdn.example.com/face-auth-client.js"></script>
+<script>
+  const client = new FaceAuthClient({
+    baseUrl: "http://127.0.0.1:8000",
+    video: document.querySelector("video")
+  });
+  await client.startCamera();
+  const result = await client.authenticate();
+  console.log(result);
+</script>
+```
+
+Run the API with CORS enabled when hosting the UI on a different domain:
+
+```bash
+python app.py serve --cors "http://127.0.0.1:5500"
+# or: python app.py serve --cors auto
+```
+
+Reference UI (static) supports an `api` query param:
+
+```text
+https://your-ui.example.com/index.html?api=http://127.0.0.1:8000
 ```
