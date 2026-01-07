@@ -23,9 +23,11 @@ This is a small learning project to understand basic face datasets, training, an
 
 - `POST /signup` enroll a person and retrain
 - `POST /authenticate` authenticate once from camera
+- `POST /authenticate-frame` authenticate from a client-captured image
 - `POST /deletefaces` clear all known faces, models, snapshots, and logs
 - `GET /ui` simple HTML dashboard
 - `GET /known/<person>/<filename>` serve stored face images
+- `GET /client` browser capture demo (client-side camera)
 - `GET /apidocs` Swagger UI
 
 Swagger UI: `http://127.0.0.1:8000/apidocs`
@@ -44,4 +46,10 @@ Run (server):
 
 ```bash
 python app.py serve
+```
+
+Client capture (browser):
+
+```text
+http://127.0.0.1:8000/client
 ```

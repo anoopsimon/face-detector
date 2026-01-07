@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import binascii
 import json
 import sqlite3
 import time
@@ -302,6 +304,56 @@ def recognize(camera_index: int, threshold: float) -> None:
     cv2.destroyAllWindows()
 
 
+def authenticate_frame(frame: np.ndarray, threshold: float):
+    ensure_dirs()
+    if not MODEL_PATH.exists() or not LABELS_PATH.exists():
+        raise RuntimeError("Model not found. Run train first.")
+
+    with LABELS_PATH.open("r", encoding="utf-8") as f:
+        label_map = {int(k): v for k, v in json.load(f).items()}
+
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.read(str(MODEL_PATH))
+    detector = face_detector()
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
+
+    best_match = None
+    for (x, y, w, h) in faces:
+        face = cv2.resize(gray[y : y + h, x : x + w], FACE_SIZE)
+        label, confidence = recognizer.predict(face)
+        if best_match is None or confidence < best_match["confidence"]:
+            best_match = {
+                "label": label,
+                "confidence": float(confidence),
+                "box": (int(x), int(y), int(w), int(h)),
+            }
+
+    timestamp = int(time.time() * 1000)
+    snapshot_path = SNAP_DIR / f"auth_{timestamp}.jpg"
+    if best_match and best_match.get("box"):
+        x, y, w, h = best_match["box"]
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    cv2.imwrite(str(snapshot_path), frame)
+
+    if best_match and best_match["confidence"] <= threshold:
+        name = label_map.get(best_match["label"], "Unknown")
+        return {
+            "status": "granted",
+            "name": name,
+            "confidence": best_match["confidence"],
+            "snapshot": str(snapshot_path),
+        }
+
+    return {
+        "status": "denied",
+        "name": "Unknown",
+        "confidence": best_match["confidence"] if best_match else None,
+        "snapshot": str(snapshot_path),
+    }
+
+
 def authenticate_once(
     camera_index: int, threshold: float, timeout: float, show_window: bool = True
 ):
@@ -447,6 +499,66 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
             return jsonify(result), status_code
         finally:
             camera_lock.release()
+
+    @app.post("/authenticate-frame")
+    def authenticate_frame_endpoint():
+        """Authenticate from a client-provided image.
+        ---
+        tags:
+          - Auth
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  image:
+                    type: string
+                    description: Base64 string or data URL of a JPEG/PNG image.
+                  consent:
+                    type: boolean
+                required:
+                  - image
+                  - consent
+        responses:
+          200:
+            description: Match granted
+          400:
+            description: Invalid image or consent missing
+          404:
+            description: No trained model
+          403:
+            description: Match denied
+        """
+        if not MODEL_PATH.exists() or not LABELS_PATH.exists():
+            return jsonify({"error": "user not found"}), 404
+
+        payload = request.get_json(silent=True) or {}
+        if payload.get("consent") is not True:
+            return jsonify({"error": "consent is required to access the camera"}), 400
+
+        raw_image = (payload.get("image") or "").strip()
+        if not raw_image:
+            return jsonify({"error": "image is required"}), 400
+
+        if raw_image.startswith("data:"):
+            _, raw_image = raw_image.split(",", 1)
+
+        try:
+            image_bytes = base64.b64decode(raw_image, validate=True)
+        except (ValueError, binascii.Error):
+            return jsonify({"error": "invalid image data"}), 400
+
+        data = np.frombuffer(image_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({"error": "invalid image data"}), 400
+
+        result = authenticate_frame(frame, threshold)
+        log_auth_result(result)
+        status_code = 200 if result["status"] == "granted" else 403
+        return jsonify(result), status_code
 
     @app.post("/signup")
     def signup():
@@ -714,6 +826,186 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
             <div class="table">
               {body}
             </div>
+          </body>
+        </html>
+        """
+
+    @app.get("/client")
+    def client():
+        return """
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Client Capture</title>
+            <style>
+              :root {
+                color-scheme: light;
+                --ink: #1f1a16;
+                --muted: #6b6150;
+                --card: #fff8e6;
+                --border: #e6dcc2;
+                --accent: #2b2a27;
+              }
+              body {
+                margin: 0;
+                padding: 24px;
+                font-family: "Trebuchet MS", "Gill Sans", "Lucida Grande", sans-serif;
+                background: radial-gradient(circle at top, #fff6db 0%, #f5f5f0 55%, #efe8d8 100%);
+                color: var(--ink);
+              }
+              .shell {
+                max-width: 720px;
+                margin: 0 auto;
+              }
+              h1 {
+                margin: 0 0 6px;
+                font-size: 24px;
+              }
+              p {
+                margin: 0 0 16px;
+                color: var(--muted);
+              }
+              .card {
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                padding: 16px;
+                box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06);
+              }
+              .consent {
+                margin: 16px 0;
+                font-size: 14px;
+              }
+              .actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 16px;
+              }
+              button {
+                border: 0;
+                padding: 10px 14px;
+                border-radius: 10px;
+                background: var(--accent);
+                color: #fff;
+                cursor: pointer;
+                font-weight: 600;
+              }
+              button:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+              }
+              .frame {
+                margin-bottom: 16px;
+              }
+              .frame-grid {
+                display: flex;
+                gap: 16px;
+                flex-wrap: wrap;
+              }
+              .frame-card {
+                flex: 1 1 280px;
+              }
+              .frame h2 {
+                margin: 0 0 10px;
+                font-size: 16px;
+                color: var(--muted);
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+              }
+              video, img {
+                width: 100%;
+                max-width: 520px;
+                border-radius: 12px;
+                border: 1px solid var(--border);
+                background: #fff;
+                display: block;
+              }
+              .status {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: 10px;
+                font-size: 13px;
+                color: var(--muted);
+              }
+              .badge {
+                background: #1f1a16;
+                color: #fff;
+                border-radius: 999px;
+                padding: 2px 8px;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+              }
+              .hidden { display: none; }
+              .result { margin-top: 12px; font-size: 13px; color: var(--muted); }
+            </style>
+          </head>
+          <body>
+            <div class="shell">
+              <h1>Client Capture</h1>
+              <p>Capture a frame locally and send it to the API for authentication.</p>
+              <div class="card consent">
+                Your camera will be accessed and a photo will be taken to validate authentication.
+              </div>
+              <div class="actions">
+                <button id="start">Start Camera</button>
+                <button id="snap" disabled>Capture and Authenticate</button>
+              </div>
+              <div class="frame-grid">
+                <div class="frame frame-card card">
+                  <h2>Live View</h2>
+                  <video id="video" autoplay playsinline class="hidden"></video>
+                </div>
+                <div class="frame frame-card card hidden" id="captured">
+                  <h2>Snapshot</h2>
+                  <img id="capturedImg" alt="Captured frame">
+                  <div class="status">
+                    <span class="badge">OK</span>
+                    <span>Completed</span>
+                  </div>
+                </div>
+              </div>
+              <canvas id="canvas" width="640" height="480" hidden></canvas>
+              <div class="result" id="result"></div>
+            </div>
+            <script>
+              const video = document.getElementById("video");
+              const canvas = document.getElementById("canvas");
+              const result = document.getElementById("result");
+              const start = document.getElementById("start");
+              const snap = document.getElementById("snap");
+              const captured = document.getElementById("captured");
+              const capturedImg = document.getElementById("capturedImg");
+              start.onclick = async () => {
+                result.textContent = "";
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.classList.remove("hidden");
+                snap.disabled = false;
+              };
+              snap.onclick = async () => {
+                if (!video.srcObject) {
+                  result.textContent = "Start the camera first.";
+                  return;
+                }
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+                capturedImg.src = dataUrl;
+                captured.classList.remove("hidden");
+                const response = await fetch("/authenticate-frame", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ image: dataUrl, consent: true })
+                });
+                const payload = await response.json();
+                result.textContent = JSON.stringify(payload);
+              };
+            </script>
           </body>
         </html>
         """
