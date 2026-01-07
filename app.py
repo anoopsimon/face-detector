@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sqlite3
 import time
 from pathlib import Path
+import shutil
+import threading
 
 import cv2
 import numpy as np
@@ -13,6 +16,7 @@ MODELS_DIR = BASE_DIR / "models"
 LABELS_PATH = MODELS_DIR / "labels.json"
 MODEL_PATH = MODELS_DIR / "lbph.yml"
 SNAP_DIR = BASE_DIR / "data" / "snapshots"
+DB_PATH = BASE_DIR / "data" / "auth_logs.db"
 
 FACE_SIZE = (200, 200)
 
@@ -21,6 +25,43 @@ def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     SNAP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                confidence REAL,
+                snapshot TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def log_auth_result(result: dict) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO auth_logs (name, status, confidence, snapshot, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                result.get("name", "Unknown"),
+                result.get("status", "denied"),
+                result.get("confidence"),
+                result.get("snapshot"),
+                time.strftime("%Y-%m-%dT%H:%M:%S"),
+            ),
+        )
+        conn.commit()
 
 
 def face_detector() -> cv2.CascadeClassifier:
@@ -44,7 +85,9 @@ def crop_face(gray: np.ndarray, rect) -> np.ndarray:
     return cv2.resize(face, FACE_SIZE)
 
 
-def enroll(name: str, count: int, camera_index: int, delay: float) -> None:
+def enroll(
+    name: str, count: int, camera_index: int, delay: float, show_window: bool = True
+) -> int:
     ensure_dirs()
     person_dir = DATA_DIR / name
     person_dir.mkdir(parents=True, exist_ok=True)
@@ -57,42 +100,57 @@ def enroll(name: str, count: int, camera_index: int, delay: float) -> None:
     captured = 0
     last_capture = 0.0
 
-    while captured < count:
-        ok, frame = cap.read()
-        if not ok:
-            break
+    start_time = time.time()
+    try:
+        while captured < count:
+            ok, frame = cap.read()
+            if not ok:
+                break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        rect = detect_largest_face(detector, gray)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            rect = detect_largest_face(detector, gray)
 
-        if rect is not None:
-            x, y, w, h = rect
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            if rect is not None:
+                x, y, w, h = rect
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            now = time.time()
-            if now - last_capture >= delay:
-                face = crop_face(gray, rect)
-                filename = person_dir / f"{captured:03d}.png"
-                cv2.imwrite(str(filename), face)
-                captured += 1
-                last_capture = now
+                now = time.time()
+                if now - last_capture >= delay:
+                    face = crop_face(gray, rect)
+                    filename = person_dir / f"{captured:03d}.png"
+                    cv2.imwrite(str(filename), face)
+                    captured += 1
+                    last_capture = now
 
-        cv2.putText(
-            frame,
-            f"Capturing {name}: {captured}/{count}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-        )
-        cv2.imshow("Enroll", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
+            if show_window:
+                elapsed = int(time.time() - start_time)
+                cv2.putText(
+                    frame,
+                    f"Capturing {name}: {captured}/{count}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 255, 255),
+                    2,
+                )
+                cv2.putText(
+                    frame,
+                    f"Camera time: {elapsed}s",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2,
+                )
+                cv2.imshow("Enroll", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        cap.release()
+        if show_window:
+            cv2.destroyAllWindows()
     print(f"Saved {captured} face images to {person_dir}")
+    return captured
 
 
 def load_training_data():
@@ -142,6 +200,44 @@ def train() -> None:
         json.dump(label_map, f, indent=2)
 
     print(f"Trained on {len(samples)} images. Model saved to {MODEL_PATH}")
+
+
+def clear_known_faces() -> dict:
+    ensure_dirs()
+    removed_people = []
+    for person_dir in DATA_DIR.glob("*"):
+        if person_dir.is_dir():
+            shutil.rmtree(person_dir)
+            removed_people.append(person_dir.name)
+        elif person_dir.is_file():
+            person_dir.unlink()
+
+    removed_files = []
+    for path in (MODEL_PATH, LABELS_PATH):
+        if path.exists():
+            path.unlink()
+            removed_files.append(path.name)
+
+    removed_snapshots = []
+    for snap in SNAP_DIR.glob("*"):
+        if snap.is_file():
+            snap.unlink()
+            removed_snapshots.append(snap.name)
+
+    cleared_logs = 0
+    if DB_PATH.exists():
+        init_db()
+        with sqlite3.connect(DB_PATH) as conn:
+            cleared_logs = conn.execute("DELETE FROM auth_logs").rowcount
+            conn.commit()
+
+    return {
+        "status": "cleared",
+        "removed_people": removed_people,
+        "removed_files": removed_files,
+        "removed_snapshots": removed_snapshots,
+        "cleared_logs": cleared_logs,
+    }
 
 
 def recognize(camera_index: int, threshold: float) -> None:
@@ -206,7 +302,9 @@ def recognize(camera_index: int, threshold: float) -> None:
     cv2.destroyAllWindows()
 
 
-def authenticate_once(camera_index: int, threshold: float, timeout: float):
+def authenticate_once(
+    camera_index: int, threshold: float, timeout: float, show_window: bool = True
+):
     ensure_dirs()
     if not MODEL_PATH.exists() or not LABELS_PATH.exists():
         raise RuntimeError("Model not found. Run train first.")
@@ -222,7 +320,8 @@ def authenticate_once(camera_index: int, threshold: float, timeout: float):
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
 
-    deadline = time.time() + timeout
+    start_time = time.time()
+    deadline = start_time + timeout
     best_match = None
     last_frame = None
 
@@ -249,10 +348,27 @@ def authenticate_once(camera_index: int, threshold: float, timeout: float):
                 if confidence <= threshold:
                     break
 
+            if show_window:
+                elapsed = int(time.time() - start_time)
+                cv2.putText(
+                    frame,
+                    f"Camera time: {elapsed}s",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2,
+                )
+                cv2.imshow("Authenticate", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
             if best_match and best_match["confidence"] <= threshold:
                 break
     finally:
         cap.release()
+        if show_window:
+            cv2.destroyAllWindows()
 
     timestamp = int(time.time() * 1000)
     snapshot_path = SNAP_DIR / f"auth_{timestamp}.jpg"
@@ -280,15 +396,327 @@ def authenticate_once(camera_index: int, threshold: float, timeout: float):
 
 
 def serve(host: str, port: int, camera_index: int, threshold: float, timeout: float) -> None:
-    from flask import Flask, jsonify
+    from flask import Flask, abort, jsonify, request, send_from_directory, url_for
+    from flasgger import Swagger
 
+    ensure_dirs()
+    init_db()
     app = Flask(__name__)
+    Swagger(app, template={"info": {"title": "Face Detector API", "version": "1.0.0"}})
+    camera_lock = threading.Lock()
 
     @app.post("/authenticate")
     def authenticate():
-        result = authenticate_once(camera_index, threshold, timeout)
-        status_code = 200 if result["status"] == "granted" else 403
-        return jsonify(result), status_code
+        """Authenticate a face once using the configured camera.
+        ---
+        tags:
+          - Auth
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  consent:
+                    type: boolean
+                required:
+                  - consent
+        responses:
+          200:
+            description: Match granted
+          403:
+            description: Match denied
+          404:
+            description: No trained model
+          409:
+            description: Camera busy
+        """
+        if not MODEL_PATH.exists() or not LABELS_PATH.exists():
+            return jsonify({"error": "user not found"}), 404
+        if not camera_lock.acquire(blocking=False):
+            return jsonify({"error": "camera is busy"}), 409
+        try:
+            payload = request.get_json(silent=True) or {}
+            if payload.get("consent") is not True:
+                return jsonify({"error": "consent is required to access the camera"}), 400
+
+            result = authenticate_once(camera_index, threshold, timeout, show_window=False)
+            log_auth_result(result)
+            status_code = 200 if result["status"] == "granted" else 403
+            return jsonify(result), status_code
+        finally:
+            camera_lock.release()
+
+    @app.post("/signup")
+    def signup():
+        """Enroll a new person and retrain the model.
+        ---
+        tags:
+          - Enrollment
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  count:
+                    type: integer
+                  delay:
+                    type: number
+                  camera:
+                    type: integer
+                  consent:
+                    type: boolean
+                required:
+                  - name
+                  - consent
+        responses:
+          200:
+            description: Enrolled
+          400:
+            description: Invalid request
+        """
+        payload = request.get_json(silent=True) or {}
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if payload.get("consent") is not True:
+            return jsonify({"error": "consent is required to access the camera"}), 400
+
+        count = int(payload.get("count", 20))
+        delay = float(payload.get("delay", 0.4))
+        cam = int(payload.get("camera", camera_index))
+
+        captured = enroll(name, count, cam, delay, show_window=False)
+        train()
+        return jsonify(
+            {
+                "status": "enrolled",
+                "name": name,
+                "captured": captured,
+                "path": str((DATA_DIR / name).resolve()),
+            }
+        )
+
+    @app.post("/deletefaces")
+    def deletefaces():
+        """Delete all known faces, models, snapshots, and auth logs.
+        ---
+        tags:
+          - Maintenance
+        responses:
+          200:
+            description: Cleared
+        """
+        result = clear_known_faces()
+        return jsonify(result)
+
+    @app.get("/known/<person>/<filename>")
+    def known_image(person: str, filename: str):
+        """Serve a stored face image.
+        ---
+        tags:
+          - Assets
+        parameters:
+          - name: person
+            in: path
+            required: true
+            schema:
+              type: string
+          - name: filename
+            in: path
+            required: true
+            schema:
+              type: string
+        responses:
+          200:
+            description: Image file
+          400:
+            description: Invalid filename
+          404:
+            description: Not found
+        """
+        person_dir = DATA_DIR / person
+        if not person_dir.is_dir():
+            abort(404)
+        if Path(filename).name != filename:
+            abort(400)
+        return send_from_directory(person_dir, filename)
+
+    @app.get("/ui")
+    def ui():
+        """Simple HTML UI for known faces and activity stats.
+        ---
+        tags:
+          - UI
+        responses:
+          200:
+            description: HTML page
+        """
+        init_db()
+        stats = {}
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                """
+                SELECT name, COUNT(*) AS total, MAX(created_at) AS last_seen
+                FROM auth_logs
+                GROUP BY name
+                """
+            ).fetchall()
+            for name, total, last_seen in rows:
+                stats[name] = {"total": total, "last_seen": last_seen}
+
+        people = []
+        for person_dir in sorted(DATA_DIR.glob("*")):
+            if not person_dir.is_dir():
+                continue
+            image_path = None
+            for pattern in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
+                candidates = sorted(person_dir.glob(pattern))
+                if candidates:
+                    image_path = candidates[0]
+                    break
+            people.append(
+                {
+                    "name": person_dir.name,
+                    "image": image_path.name if image_path else None,
+                    "total": stats.get(person_dir.name, {}).get("total", 0),
+                    "last_seen": stats.get(person_dir.name, {}).get("last_seen"),
+                }
+            )
+
+        rows = []
+        for person in people:
+            if person["image"]:
+                img_url = url_for("known_image", person=person["name"], filename=person["image"])
+                img_tag = f'<img class="avatar" src="{img_url}" alt="{person["name"]}">'
+            else:
+                img_tag = '<div class="placeholder">No image</div>'
+            last_seen = person["last_seen"] or "—"
+            rows.append(
+                f"""
+                <div class="row">
+                  {img_tag}
+                  <div class="name">{person["name"]}</div>
+                  <div class="meta">
+                    <div class="label">Auth count</div>
+                    <div class="value">{person["total"]}</div>
+                  </div>
+                  <div class="meta">
+                    <div class="label">Last seen</div>
+                    <div class="value">{last_seen}</div>
+                  </div>
+                </div>
+                """
+            )
+
+        body = "\n".join(rows) if rows else '<p class="empty">No enrolled people yet.</p>'
+        return f"""
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Known Faces</title>
+            <style>
+              :root {{
+                color-scheme: light;
+              }}
+              body {{
+                margin: 0;
+                padding: 24px;
+                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+                background: #f5f5f0;
+                color: #1f1f1f;
+              }}
+              h1 {{
+                margin: 0 0 8px;
+                font-size: 24px;
+              }}
+              .page-header {{
+                margin-bottom: 16px;
+              }}
+              .subtitle {{
+                margin: 0;
+                color: #6b6150;
+                font-size: 14px;
+              }}
+              .table {{
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+              }}
+              .row {{
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                background: #fff8e6;
+                border: 1px solid #e6dcc2;
+                border-radius: 12px;
+                padding: 10px 14px;
+                box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+              }}
+              .name {{
+                font-weight: 600;
+                font-size: 16px;
+                min-width: 140px;
+              }}
+              .meta {{
+                display: flex;
+                flex-direction: column;
+                min-width: 120px;
+                gap: 2px;
+              }}
+              .label {{
+                font-size: 12px;
+                color: #8b7e64;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+              }}
+              .value {{
+                font-size: 14px;
+                color: #2b2b2b;
+              }}
+              .avatar {{
+                width: 96px;
+                height: 120px;
+                object-fit: cover;
+                border-radius: 8px;
+                border: 1px solid #e0d5b7;
+                background: #fff;
+                display: block;
+              }}
+              .placeholder {{
+                width: 96px;
+                height: 120px;
+                border-radius: 8px;
+                border: 1px dashed #d3c7a5;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #7a6f5a;
+                background: #fff3d6;
+              }}
+              .empty {{
+                color: #6b6150;
+              }}
+            </style>
+          </head>
+          <body>
+            <header class="page-header">
+              <h1>Known Faces</h1>
+              <p class="subtitle">Live overview of enrolled people and recent authentication activity.</p>
+            </header>
+            <div class="table">
+              {body}
+            </div>
+          </body>
+        </html>
+        """
 
     app.run(host=host, port=port)
 
