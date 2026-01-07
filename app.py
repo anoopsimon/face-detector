@@ -354,6 +354,49 @@ def authenticate_frame(frame: np.ndarray, threshold: float):
     }
 
 
+def decode_base64_image(raw_image: str):
+    raw_image = (raw_image or "").strip()
+    if not raw_image:
+        return None, "image is required"
+
+    if raw_image.startswith("data:"):
+        _, raw_image = raw_image.split(",", 1)
+
+    try:
+        image_bytes = base64.b64decode(raw_image, validate=True)
+    except (ValueError, binascii.Error):
+        return None, "invalid image data"
+
+    data = np.frombuffer(image_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if frame is None:
+        return None, "invalid image data"
+
+    return frame, None
+
+
+def enroll_from_frames(name: str, frames: list[np.ndarray]) -> int:
+    ensure_dirs()
+    person_dir = DATA_DIR / name
+    person_dir.mkdir(parents=True, exist_ok=True)
+
+    detector = face_detector()
+    existing = len([p for p in person_dir.glob("*.png") if p.is_file()])
+    captured = 0
+
+    for frame in frames:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        rect = detect_largest_face(detector, gray)
+        if rect is None:
+            continue
+        face = crop_face(gray, rect)
+        filename = person_dir / f"{existing + captured:03d}.png"
+        cv2.imwrite(str(filename), face)
+        captured += 1
+
+    return captured
+
+
 def authenticate_once(
     camera_index: int, threshold: float, timeout: float, show_window: bool = True
 ):
@@ -448,7 +491,7 @@ def authenticate_once(
 
 
 def serve(host: str, port: int, camera_index: int, threshold: float, timeout: float) -> None:
-    from flask import Flask, abort, jsonify, request, send_from_directory, url_for
+    from flask import Flask, abort, jsonify, redirect, request, send_from_directory, url_for
     from flasgger import Swagger
 
     ensure_dirs()
@@ -538,22 +581,9 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
         if payload.get("consent") is not True:
             return jsonify({"error": "consent is required to access the camera"}), 400
 
-        raw_image = (payload.get("image") or "").strip()
-        if not raw_image:
-            return jsonify({"error": "image is required"}), 400
-
-        if raw_image.startswith("data:"):
-            _, raw_image = raw_image.split(",", 1)
-
-        try:
-            image_bytes = base64.b64decode(raw_image, validate=True)
-        except (ValueError, binascii.Error):
-            return jsonify({"error": "invalid image data"}), 400
-
-        data = np.frombuffer(image_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        if frame is None:
-            return jsonify({"error": "invalid image data"}), 400
+        frame, error = decode_base64_image(payload.get("image"))
+        if error:
+            return jsonify({"error": error}), 400
 
         result = authenticate_frame(frame, threshold)
         log_auth_result(result)
@@ -604,6 +634,70 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
         cam = int(payload.get("camera", camera_index))
 
         captured = enroll(name, count, cam, delay, show_window=False)
+        train()
+        return jsonify(
+            {
+                "status": "enrolled",
+                "name": name,
+                "captured": captured,
+                "path": str((DATA_DIR / name).resolve()),
+            }
+        )
+
+    @app.post("/signup-frame")
+    def signup_frame():
+        """Enroll a new person from client-provided images.
+        ---
+        tags:
+          - Enrollment
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  images:
+                    type: array
+                    items:
+                      type: string
+                    description: Base64 strings or data URLs of images.
+                  consent:
+                    type: boolean
+                required:
+                  - name
+                  - images
+                  - consent
+        responses:
+          200:
+            description: Enrolled
+          400:
+            description: Invalid request
+        """
+        payload = request.get_json(silent=True) or {}
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if payload.get("consent") is not True:
+            return jsonify({"error": "consent is required to access the camera"}), 400
+
+        images = payload.get("images") or []
+        if not isinstance(images, list) or not images:
+            return jsonify({"error": "images are required"}), 400
+
+        frames = []
+        for idx, raw_image in enumerate(images):
+            frame, error = decode_base64_image(raw_image)
+            if error:
+                return jsonify({"error": f"image {idx + 1}: {error}"}), 400
+            frames.append(frame)
+
+        captured = enroll_from_frames(name, frames)
+        if captured == 0:
+            return jsonify({"error": "no faces detected in provided images"}), 400
+
         train()
         return jsonify(
             {
@@ -838,41 +932,62 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
           <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Client Capture</title>
+            <title>Face Access</title>
             <style>
               :root {
                 color-scheme: light;
-                --ink: #1f1a16;
-                --muted: #6b6150;
-                --card: #fff8e6;
-                --border: #e6dcc2;
-                --accent: #2b2a27;
+                --ink: #1b1b1b;
+                --muted: #5a5a5a;
+                --card: #ffffff;
+                --border: #e3ded6;
+                --accent: #1e2a2f;
+                --accent-2: #c36f2c;
+                --glow: rgba(195, 111, 44, 0.25);
+                --shadow: 0 18px 40px rgba(30, 20, 10, 0.12);
               }
               body {
                 margin: 0;
-                padding: 24px;
-                font-family: "Trebuchet MS", "Gill Sans", "Lucida Grande", sans-serif;
-                background: radial-gradient(circle at top, #fff6db 0%, #f5f5f0 55%, #efe8d8 100%);
+                padding: 28px 18px 40px;
+                font-family: "Space Grotesk", "Futura", "Avenir Next", sans-serif;
+                background: radial-gradient(circle at top left, #ffe9d2 0%, #f8f3ea 40%, #eee3d5 100%);
                 color: var(--ink);
               }
               .shell {
-                max-width: 720px;
+                max-width: 980px;
                 margin: 0 auto;
               }
               h1 {
                 margin: 0 0 6px;
-                font-size: 24px;
+                font-size: 28px;
+                letter-spacing: -0.02em;
               }
               p {
                 margin: 0 0 16px;
                 color: var(--muted);
               }
+              .hero {
+                display: grid;
+                gap: 18px;
+                margin-bottom: 18px;
+              }
+              .brand {
+                font-weight: 700;
+                font-size: 14px;
+                letter-spacing: 0.2em;
+                color: var(--accent);
+                text-transform: uppercase;
+              }
+              .layout {
+                display: grid;
+                gap: 18px;
+                grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+              }
               .card {
                 background: var(--card);
                 border: 1px solid var(--border);
-                border-radius: 14px;
-                padding: 16px;
-                box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06);
+                border-radius: 18px;
+                padding: 18px;
+                box-shadow: var(--shadow);
               }
               .consent {
                 margin: 16px 0;
@@ -883,6 +998,22 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
                 flex-wrap: wrap;
                 gap: 10px;
                 margin-bottom: 16px;
+              }
+              .mode {
+                display: flex;
+                gap: 10px;
+                margin: 12px 0 16px;
+              }
+              .mode button {
+                background: transparent;
+                color: var(--muted);
+                border: 1px solid var(--border);
+              }
+              .mode button.active {
+                background: var(--accent);
+                color: #fff;
+                border-color: var(--accent);
+                box-shadow: 0 8px 18px var(--glow);
               }
               button {
                 border: 0;
@@ -901,9 +1032,9 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
                 margin-bottom: 16px;
               }
               .frame-grid {
-                display: flex;
+                display: grid;
                 gap: 16px;
-                flex-wrap: wrap;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
               }
               .frame-card {
                 flex: 1 1 280px;
@@ -942,35 +1073,145 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
               }
               .hidden { display: none; }
               .result { margin-top: 12px; font-size: 13px; color: var(--muted); }
+              .signup-fields {
+                display: grid;
+                gap: 12px;
+                margin-bottom: 16px;
+              }
+              .field label {
+                display: block;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--muted);
+                margin-bottom: 6px;
+              }
+              .field input {
+                width: 100%;
+                padding: 10px 12px;
+                border-radius: 10px;
+                border: 1px solid var(--border);
+                font-family: inherit;
+                font-size: 14px;
+              }
+              .form-card {
+                position: relative;
+                overflow: hidden;
+                animation: lift 0.6s ease-out;
+              }
+              .form-card::after {
+                content: "";
+                position: absolute;
+                width: 220px;
+                height: 220px;
+                border-radius: 50%;
+                background: radial-gradient(circle, var(--glow) 0%, transparent 70%);
+                top: -80px;
+                right: -60px;
+                pointer-events: none;
+              }
+              .helper {
+                font-size: 13px;
+                color: var(--muted);
+                margin: 0 0 14px;
+              }
+              .primary {
+                background: linear-gradient(135deg, var(--accent) 0%, #303e45 100%);
+              }
+              .secondary {
+                background: transparent;
+                color: var(--accent);
+                border: 1px solid var(--accent);
+              }
+              .cta-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+              }
+              .status-card {
+                min-height: 120px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+              }
+              @keyframes lift {
+                from { transform: translateY(16px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+              }
+              @media (max-width: 900px) {
+                .layout {
+                  grid-template-columns: 1fr;
+                }
+              }
+              @media (max-width: 600px) {
+                body {
+                  padding: 18px 12px 30px;
+                }
+                h1 {
+                  font-size: 24px;
+                }
+                .mode {
+                  flex-direction: column;
+                }
+              }
             </style>
           </head>
           <body>
             <div class="shell">
-              <h1>Client Capture</h1>
-              <p>Capture a frame locally and send it to the API for authentication.</p>
-              <div class="card consent">
-                Your camera will be accessed and a photo will be taken to validate authentication.
+              <div class="hero">
+                <div class="brand">Face Access</div>
+                <h1>Secure access, made human.</h1>
+                <p>Choose to sign in or create a new profile with a quick selfie check.</p>
               </div>
-              <div class="actions">
-                <button id="start">Start Camera</button>
-                <button id="snap" disabled>Capture and Authenticate</button>
-              </div>
-              <div class="frame-grid">
-                <div class="frame frame-card card">
-                  <h2>Live View</h2>
-                  <video id="video" autoplay playsinline class="hidden"></video>
-                </div>
-                <div class="frame frame-card card hidden" id="captured">
-                  <h2>Snapshot</h2>
-                  <img id="capturedImg" alt="Captured frame">
-                  <div class="status">
-                    <span class="badge">OK</span>
-                    <span>Completed</span>
+              <div class="layout">
+                <section class="card form-card">
+                  <div class="mode">
+                    <button class="mode-btn active" data-mode="auth">Log In</button>
+                    <button class="mode-btn" data-mode="signup">Sign Up</button>
                   </div>
-                </div>
+                  <p class="helper">Your camera stays local and only snapshots are sent for verification.</p>
+                  <div class="card consent">
+                    Your camera will be accessed and photos will be taken to validate authentication or sign up.
+                  </div>
+                  <div class="card signup-fields hidden" id="signupFields">
+                    <div class="field">
+                      <label for="signupName">Name</label>
+                      <input id="signupName" placeholder="Anoop" autocomplete="name">
+                    </div>
+                  </div>
+                  <div class="actions" id="authActions">
+                    <button id="start" class="primary">Start Camera</button>
+                    <button id="snap" disabled>Capture and Authenticate</button>
+                  </div>
+                  <div class="actions hidden" id="signupActions">
+                    <button id="startSignup" class="primary">Start Camera</button>
+                    <button id="signup" disabled>Capture for Sign Up</button>
+                  </div>
+                  <div class="cta-row">
+                    <button class="secondary" id="stopCamera">Stop Camera</button>
+                  </div>
+                  <div class="result" id="result"></div>
+                </section>
+                <section class="frame-grid">
+                  <div class="frame frame-card card status-card">
+                    <h2>Live View</h2>
+                    <video id="video" autoplay playsinline class="hidden"></video>
+                    <div class="status">
+                      <span class="badge">LIVE</span>
+                      <span>Camera preview</span>
+                    </div>
+                  </div>
+                  <div class="frame frame-card card hidden" id="captured">
+                    <h2>Snapshot</h2>
+                    <img id="capturedImg" alt="Captured frame">
+                    <div class="status">
+                      <span class="badge">OK</span>
+                      <span>Completed</span>
+                    </div>
+                  </div>
+                </section>
               </div>
               <canvas id="canvas" width="640" height="480" hidden></canvas>
-              <div class="result" id="result"></div>
             </div>
             <script>
               const video = document.getElementById("video");
@@ -978,18 +1219,71 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
               const result = document.getElementById("result");
               const start = document.getElementById("start");
               const snap = document.getElementById("snap");
+              const startSignup = document.getElementById("startSignup");
+              const signup = document.getElementById("signup");
+              const signupFields = document.getElementById("signupFields");
+              const signupName = document.getElementById("signupName");
+              const authActions = document.getElementById("authActions");
+              const signupActions = document.getElementById("signupActions");
+              const stopCamera = document.getElementById("stopCamera");
               const captured = document.getElementById("captured");
               const capturedImg = document.getElementById("capturedImg");
-              start.onclick = async () => {
-                result.textContent = "";
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
+              const modeButtons = document.querySelectorAll(".mode-btn");
+              let mode = "auth";
+              let capturing = false;
+
+              const setResult = (message) => {
+                result.textContent = message || "";
+              };
+
+              const ensureCamera = async () => {
+                setResult("");
+                if (!video.srcObject) {
+                  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                  video.srcObject = stream;
+                }
                 video.classList.remove("hidden");
                 snap.disabled = false;
+                signup.disabled = false;
               };
+
+              const stopStream = () => {
+                if (!video.srcObject) {
+                  return;
+                }
+                video.srcObject.getTracks().forEach((track) => track.stop());
+                video.srcObject = null;
+                video.classList.add("hidden");
+                snap.disabled = true;
+                signup.disabled = true;
+              };
+
+              const setMode = (nextMode) => {
+                mode = nextMode;
+                modeButtons.forEach((btn) => {
+                  btn.classList.toggle("active", btn.dataset.mode === mode);
+                });
+                signupFields.classList.toggle("hidden", mode !== "signup");
+                signupActions.classList.toggle("hidden", mode !== "signup");
+                authActions.classList.toggle("hidden", mode !== "auth");
+                setResult("");
+              };
+
+              const initialMode = new URLSearchParams(window.location.search).get("mode");
+              if (initialMode === "signup") {
+                setMode("signup");
+              }
+
+              modeButtons.forEach((btn) => {
+                btn.addEventListener("click", () => setMode(btn.dataset.mode));
+              });
+
+              start.onclick = ensureCamera;
+              startSignup.onclick = ensureCamera;
+              stopCamera.onclick = stopStream;
               snap.onclick = async () => {
                 if (!video.srcObject) {
-                  result.textContent = "Start the camera first.";
+                  setResult("Start the camera first.");
                   return;
                 }
                 const ctx = canvas.getContext("2d");
@@ -1003,12 +1297,60 @@ def serve(host: str, port: int, camera_index: int, threshold: float, timeout: fl
                   body: JSON.stringify({ image: dataUrl, consent: true })
                 });
                 const payload = await response.json();
-                result.textContent = JSON.stringify(payload);
+                setResult(JSON.stringify(payload));
+              };
+              signup.onclick = async () => {
+                if (capturing) {
+                  return;
+                }
+                if (!video.srcObject) {
+                  setResult("Start the camera first.");
+                  return;
+                }
+                const name = (signupName.value || "").trim();
+                if (!name) {
+                  setResult("Enter a name before signing up.");
+                  return;
+                }
+                const count = 6;
+                capturing = true;
+                signup.disabled = true;
+                snap.disabled = true;
+                setResult(`Capturing ${count} snapshots for ${name}...`);
+
+                const ctx = canvas.getContext("2d");
+                const images = [];
+                for (let i = 0; i < count; i += 1) {
+                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                  images.push(canvas.toDataURL("image/jpeg", 0.9));
+                  await new Promise((resolve) => setTimeout(resolve, 300));
+                }
+                capturedImg.src = images[images.length - 1];
+                captured.classList.remove("hidden");
+
+                const response = await fetch("/signup-frame", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name, images, consent: true })
+                });
+                const payload = await response.json();
+                if (response.ok) {
+                  setResult(`Sign up successful '${payload.name}'. Captured ${payload.captured} images.`);
+                } else {
+                  setResult(payload.error || "Sign up failed.");
+                }
+                capturing = false;
+                signup.disabled = false;
+                snap.disabled = false;
               };
             </script>
           </body>
         </html>
         """
+
+    @app.get("/signup-ui")
+    def signup_ui():
+        return redirect(url_for("client", mode="signup"))
 
     app.run(host=host, port=port)
 

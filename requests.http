@@ -12,6 +12,16 @@ Content-Type: application/json
   "consent": true
 }
 
+### Signup from client frames
+POST {{host}}/signup-frame
+Content-Type: application/json
+
+{
+  "name": "anoop",
+  "images": ["data:image/jpeg;base64,..."],
+  "consent": true
+}
+
 ### Authenticate
 POST {{host}}/authenticate
 Content-Type: application/json
