@@ -86,6 +86,16 @@ Use the client SDK in your own UI:
 </script>
 ```
 
+## 6. UI Preview
+
+Authenticate flow:
+
+![Authenticate UI](docs/img/authenticate.png)
+
+Enroll flow:
+
+![Enroll UI](docs/img/enroll.png)
+
 Run the API with CORS enabled when hosting the UI on a different domain:
 
 ```bash

@@ -5,3 +5,5 @@ models/
 data/auth_logs.db
 __pycache__/
 *.pyc
+models/labels.json
+models/lbph.yml

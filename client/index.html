@@ -3,158 +3,464 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Face Auth Client</title>
+    <title>Face Verify</title>
     <style>
+      @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap");
+
+      :root {
+        color-scheme: light;
+        --ink: #1c1511;
+        --muted: #6b5f57;
+        --accent: #d07a2d;
+        --accent-dark: #a8581f;
+        --surface: #ffffff;
+        --stroke: #eaded3;
+        --soft: #faf3ec;
+        --success: #2e9e6b;
+        --ring: rgba(208, 122, 45, 0.25);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
-        padding: 24px;
-        font-family: "Space Grotesk", "Futura", "Avenir Next", sans-serif;
-        background: #f6f1e8;
-        color: #1f1f1f;
+        font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 20% 10%, #fff1e4 0%, #f7f1ea 45%, #efe8df 100%);
+        color: var(--ink);
+        min-height: 100vh;
       }
-      .shell {
-        max-width: 920px;
-        margin: 0 auto;
+
+      .page {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
       }
-      h1 {
-        margin: 0 0 6px;
-        font-size: 28px;
-      }
-      p {
-        margin: 0 0 18px;
-        color: #5c5247;
-      }
-      .layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        gap: 18px;
-      }
-      .card {
-        background: #fff;
-        border: 1px solid #e6dcc2;
-        border-radius: 16px;
-        padding: 16px;
-        box-shadow: 0 16px 30px rgba(16, 12, 8, 0.08);
-      }
-      .preview {
+
+      .hero {
+        padding: 24px 18px 10px;
         position: relative;
+        overflow: hidden;
       }
-      .preview canvas {
+
+      .hero::before,
+      .hero::after {
+        content: "";
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
+        border-radius: 999px;
+        opacity: 0.18;
       }
-      button {
-        border: 0;
-        padding: 10px 14px;
-        border-radius: 10px;
-        background: #1e2a2f;
-        color: #fff;
-        cursor: pointer;
+
+      .hero::before {
+        width: 220px;
+        height: 220px;
+        background: #d07a2d;
+        top: -90px;
+        right: -90px;
+      }
+
+      .hero::after {
+        width: 180px;
+        height: 180px;
+        background: #2fa56e;
+        bottom: -80px;
+        left: -70px;
+      }
+
+      .brand {
+        text-transform: uppercase;
+        letter-spacing: 0.4em;
+        font-size: 11px;
+        font-weight: 600;
+        color: #4a3325;
+      }
+
+      h1 {
+        margin: 10px 0 6px;
+        font-size: 26px;
+      }
+
+      .sub {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .shell {
+        padding: 0 18px 28px;
+        display: grid;
+        gap: 16px;
+        justify-items: center;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--stroke);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: 0 18px 40px rgba(15, 21, 38, 0.08);
+        width: 100%;
+        max-width: 560px;
+      }
+
+      .step {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .step strong {
+        color: var(--ink);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #fbe7d3;
+        color: #a2581d;
+        font-size: 12px;
         font-weight: 600;
       }
-      button.secondary {
-        background: transparent;
-        color: #1e2a2f;
-        border: 1px solid #1e2a2f;
+
+      .camera-wrap {
+        display: grid;
+        gap: 14px;
       }
-      button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-      video, img {
+
+      .preview {
         width: 100%;
-        border-radius: 12px;
-        border: 1px solid #e6dcc2;
-        background: #fff;
+        max-width: 320px;
+        margin: 0 auto;
+        aspect-ratio: 1 / 1;
+        border-radius: 50%;
+        background: #0f1526;
+        position: relative;
+        overflow: hidden;
+        border: 8px solid rgba(208, 122, 45, 0.12);
+        box-shadow: 0 0 0 10px var(--ring);
       }
+
+      .preview video,
+      .preview canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .hint {
+        text-align: center;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .controls {
+        display: grid;
+        gap: 12px;
+      }
+
+      .consent-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+
+      .mode {
+        display: inline-flex;
+        border: 1px solid var(--stroke);
+        border-radius: 999px;
+        overflow: hidden;
+        background: #f7efe6;
+      }
+
+      .mode button {
+        flex: 1;
+        border: 0;
+        padding: 8px 14px;
+        background: transparent;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .mode button.active {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .field label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      input {
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--stroke);
+        font-size: 14px;
+      }
+
       .row {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
-        margin-top: 12px;
       }
-      .field {
-        display: grid;
-        gap: 6px;
-        margin-top: 10px;
+
+      button.primary {
+        flex: 1;
+        border: 0;
+        padding: 12px 16px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+        min-width: 180px;
       }
-      input {
-        padding: 10px 12px;
-        border-radius: 10px;
-        border: 1px solid #e6dcc2;
-        font-size: 14px;
+
+      button.secondary {
+        border: 1px solid var(--stroke);
+        padding: 10px 14px;
+        border-radius: 12px;
+        background: #fff;
+        color: var(--ink);
+        font-weight: 600;
+        cursor: pointer;
       }
-      .result {
-        margin-top: 12px;
+
+      .hidden {
+        display: none;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
         font-size: 13px;
-        color: #5c5247;
-        min-height: 20px;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #c7c9d3;
+      }
+
+      .dot.live {
+        background: var(--success);
+        box-shadow: 0 0 0 6px rgba(26, 163, 111, 0.18);
+      }
+
+      .result {
+        background: var(--soft);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 12px;
+        color: #3a4257;
+        min-height: 48px;
         white-space: pre-wrap;
       }
-      @media (max-width: 860px) {
-        .layout {
-          grid-template-columns: 1fr;
+
+      .progress {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: #f0e6dc;
+        overflow: hidden;
+        border: 1px solid var(--stroke);
+        display: none;
+      }
+
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+        transition: width 0.2s ease;
+      }
+
+      .footer {
+        text-align: center;
+        font-size: 11px;
+        color: #8a90a3;
+      }
+
+      .fade-in {
+        animation: rise 0.6s ease-out;
+      }
+
+      @keyframes rise {
+        from {
+          transform: translateY(12px);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      @media (min-width: 900px) {
+        .shell {
+          grid-template-columns: minmax(0, 560px) minmax(0, 560px);
+          align-items: start;
+          padding: 10px 32px 40px;
+        }
+        .hero {
+          padding: 32px 32px 14px;
+        }
+        h1 {
+          font-size: 32px;
         }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <h1>Face Auth Client</h1>
-      <p>Reference UI powered by the pluggable client SDK.</p>
-      <div class="layout">
-        <section class="card">
+    <div class="page">
+      <header class="hero">
+        <div class="brand">Face Verify</div>
+        <h1>Confirm your identity in seconds.</h1>
+        <p class="sub">A quick face check to unlock access securely.</p>
+      </header>
+
+      <main class="shell">
+        <section class="card fade-in" id="consentPanel">
+          <div class="chip">Step 1 • Consent</div>
+          <div class="step" style="margin-top: 12px;">
+            <div>✔</div>
+            <div>
+              <strong>Use your camera</strong>
+              <div>We only send snapshots for verification. No video is stored.</div>
+            </div>
+          </div>
+          <div class="step" style="margin-top: 12px;">
+            <div>✔</div>
+            <div>
+              <strong>Match your profile</strong>
+              <div>Keep your face inside the circle for best results.</div>
+            </div>
+          </div>
+          <div class="step" style="margin-top: 12px;">
+            <div>✔</div>
+            <div>
+              <strong>Confirm access</strong>
+              <div>We show the decision instantly.</div>
+            </div>
+          </div>
+          <div class="consent-actions">
+            <button id="agreeBtn" class="primary">Agree</button>
+            <button id="quitBtn" class="secondary">Quit</button>
+          </div>
+        </section>
+
+        <section class="card camera-wrap fade-in hidden" id="cameraPanel">
           <div class="preview">
-            <video id="video" autoplay playsinline></video>
+            <video id="video" autoplay playsinline muted></video>
             <canvas id="overlay"></canvas>
           </div>
-          <p>API base URL: <span id="apiBase"></span></p>
-          <div class="row">
-            <button id="start">Start Camera</button>
-            <button id="stop" class="secondary">Stop Camera</button>
+          <div class="hint">Align your face inside the ring.</div>
+
+          <div class="controls">
+            <div class="mode" role="tablist">
+              <button class="mode-btn active" data-mode="auth">Face Check</button>
+              <button class="mode-btn" data-mode="signup">Enroll</button>
+            </div>
+
+            <div class="field" id="signupField" style="display: none;">
+              <label for="name">Full name</label>
+              <input id="name" placeholder="Anoop" autocomplete="name">
+            </div>
+
+            <div class="row">
+              <button id="start" class="secondary">Start camera</button>
+              <button id="stop" class="secondary">Stop</button>
+            </div>
+
+            <button id="primary" class="primary">Capture & Authenticate</button>
+
+            <div class="status">
+              <span class="dot" id="liveDot"></span>
+              <span id="statusText">Camera idle</span>
+            </div>
+
+            <div class="progress" id="progress">
+              <div class="progress-bar" id="progressBar"></div>
+            </div>
+
+            <div class="result" id="result"></div>
+            <div class="footer" id="apiBase"></div>
           </div>
-          <div class="field">
-            <label for="name">Name (for signup)</label>
-            <input id="name" placeholder="Anoop" autocomplete="name">
-          </div>
-          <div class="row">
-            <button id="auth">Capture & Authenticate</button>
-            <button id="signup" class="secondary">Capture & Sign Up</button>
-          </div>
-          <div class="result" id="result"></div>
         </section>
-        <section class="card">
-          <img id="preview" alt="Captured frame">
-        </section>
-      </div>
+      </main>
     </div>
 
     <script src="./face-auth-client.js"></script>
     <script>
       const video = document.getElementById("video");
-      const preview = document.getElementById("preview");
       const overlay = document.getElementById("overlay");
       const result = document.getElementById("result");
       const nameInput = document.getElementById("name");
-      const authBtn = document.getElementById("auth");
-      const signupBtn = document.getElementById("signup");
+      const signupField = document.getElementById("signupField");
       const startBtn = document.getElementById("start");
       const stopBtn = document.getElementById("stop");
+      const primaryBtn = document.getElementById("primary");
       const apiBase = document.getElementById("apiBase");
+      const statusText = document.getElementById("statusText");
+      const liveDot = document.getElementById("liveDot");
+      const progress = document.getElementById("progress");
+      const progressBar = document.getElementById("progressBar");
+      const modeButtons = document.querySelectorAll(".mode-btn");
       const overlayCtx = overlay.getContext("2d");
-      let detectTimer = null;
+      const agreeBtn = document.getElementById("agreeBtn");
+      const quitBtn = document.getElementById("quitBtn");
+      const consentPanel = document.getElementById("consentPanel");
+      const cameraPanel = document.getElementById("cameraPanel");
 
       const params = new URLSearchParams(window.location.search);
       const baseUrl = params.get("api") || "http://127.0.0.1:8000";
-      apiBase.textContent = baseUrl;
+      apiBase.textContent = "API: " + baseUrl;
+
       const client = new FaceAuthClient({ video, baseUrl });
+      let mode = "auth";
+      let detectTimer = null;
 
       const setResult = (payload) => {
         result.textContent = payload || "";
+      };
+
+      const setProgress = (value) => {
+        if (value === null) {
+          progress.style.display = "none";
+          progressBar.style.width = "0%";
+          return;
+        }
+        progress.style.display = "block";
+        progressBar.style.width = Math.max(0, Math.min(100, value)) + "%";
+      };
+
+      const setLive = (isLive) => {
+        liveDot.classList.toggle("live", isLive);
+        statusText.textContent = isLive ? "Camera active" : "Camera idle";
       };
 
       const resizeOverlay = () => {
@@ -174,7 +480,10 @@
         overlayCtx.shadowColor = "rgba(32, 192, 100, 0.35)";
         overlayCtx.shadowBlur = 8;
         boxes.forEach((box) => {
-          const [x, y, w, h] = box;
+          const x = box[0];
+          const y = box[1];
+          const w = box[2];
+          const h = box[3];
           const cx = x + w / 2;
           const cy = y + h / 2;
           const r = Math.min(w, h) / 2;
@@ -211,43 +520,88 @@
         drawBoxes([]);
       };
 
+      const setMode = (nextMode) => {
+        mode = nextMode;
+        modeButtons.forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.mode === mode);
+        });
+        signupField.style.display = mode === "signup" ? "grid" : "none";
+        primaryBtn.textContent = mode === "signup" ? "Capture & Enroll" : "Capture & Authenticate";
+        setResult("");
+      };
+
+      modeButtons.forEach((btn) => {
+        btn.addEventListener("click", () => setMode(btn.dataset.mode));
+      });
+
+      agreeBtn.addEventListener("click", () => {
+        consentPanel.classList.add("hidden");
+        cameraPanel.classList.remove("hidden");
+      });
+
+      quitBtn.addEventListener("click", () => {
+        client.stopCamera();
+        stopDetectionLoop();
+        setLive(false);
+        if (window.history.length > 1) {
+          window.history.back();
+        } else {
+          consentPanel.classList.remove("hidden");
+          cameraPanel.classList.add("hidden");
+        }
+      });
+
       startBtn.addEventListener("click", async () => {
         await client.startCamera();
         resizeOverlay();
         startDetectionLoop();
+        setLive(true);
         setResult("");
       });
 
       stopBtn.addEventListener("click", () => {
         client.stopCamera();
         stopDetectionLoop();
+        setLive(false);
         setResult("");
       });
 
-      authBtn.addEventListener("click", async () => {
-        try {
-          const image = client.captureImage();
-          preview.src = image;
-          const payload = await client.authenticate({ image });
-          setResult(JSON.stringify(payload, null, 2));
-        } catch (err) {
-          setResult(err.message || "Authentication failed");
-        }
-      });
-
-      signupBtn.addEventListener("click", async () => {
-        const name = (nameInput.value || "").trim();
-        if (!name) {
-          setResult("Enter a name first.");
+      primaryBtn.addEventListener("click", async () => {
+        if (!client.stream) {
+          setResult("Start the camera first.");
           return;
         }
         try {
-          const payload = await client.signup(name, { count: 6, intervalMs: 300 });
-          setResult(JSON.stringify(payload, null, 2));
+          if (mode === "signup") {
+            const name = (nameInput.value || "").trim();
+            if (!name) {
+              setResult("Enter a name before enrolling.");
+              return;
+            }
+            const count = 8;
+            const intervalMs = 350;
+            setProgress(0);
+            let completed = 0;
+            const timer = setInterval(() => {
+              completed += 1;
+              setProgress((completed / count) * 100);
+            }, intervalMs);
+            const payload = await client.signup(name, { count, intervalMs });
+            clearInterval(timer);
+            setProgress(100);
+            setResult(JSON.stringify(payload, null, 2));
+          } else {
+            const payload = await client.authenticate({});
+            setResult(JSON.stringify(payload, null, 2));
+          }
         } catch (err) {
-          setResult(err.message || "Signup failed");
+          setResult(err.message || "Request failed");
+        } finally {
+          setTimeout(() => setProgress(null), 600);
         }
       });
+
+      setMode(mode);
     </script>
   </body>
 </html>
